@@ -1,0 +1,11 @@
+[package]
+name = "sam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sam-core = { path = "../../crates/sam-core" }
+sam-protocol = { path = "../../crates/sam-protocol" }
+sam-transport = { path = "../../crates/sam-transport" }
+tokio.workspace = true

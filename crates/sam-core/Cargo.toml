@@ -1,0 +1,10 @@
+[package]
+name = "sam-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sam-protocol = { path = "../sam-protocol" }
+thiserror.workspace = true
+

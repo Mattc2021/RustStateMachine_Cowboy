@@ -1,0 +1,12 @@
+[package]
+name = "sam-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+postcard.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+

@@ -1,0 +1,10 @@
+[package]
+name = "sam-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sam-protocol = { path = "../sam-protocol" }
+sam-transport = { path = "../sam-transport" }
+tokio.workspace = true

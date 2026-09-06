@@ -16,7 +16,7 @@ mod windows;
 compile_error!("sam-transport currently supports Unix-like systems and Windows");
 
 pub use endpoint::LocalEndpoint;
-pub use error::TransportError;
+pub use error::{is_disconnect, TransportError};
 pub use frame::{FramedConnection, FramedReader, FramedWriter, DEFAULT_MAX_FRAME_SIZE};
 
 #[cfg(unix)]

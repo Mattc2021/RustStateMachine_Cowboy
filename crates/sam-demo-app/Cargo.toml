@@ -1,0 +1,11 @@
+[package]
+name = "sam-demo-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+sam-client = { path = "../sam-client" }
+sam-protocol = { path = "../sam-protocol" }
+

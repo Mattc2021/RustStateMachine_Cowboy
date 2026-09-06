@@ -24,7 +24,7 @@ impl HealthManager {
     /// reports `Degraded`, and `Healthy` only if every application is
     /// healthy (an empty registry is therefore reported as `Healthy`).
     pub fn calculate(&self, registry: &ApplicationRegistry, now: Instant) -> HealthState {
-        let mut overall: HealthState = HealthState::Healthy;
+        let mut overall = HealthState::Healthy;
 
         for (_, application) in registry.iter() {
             if !application.connected
@@ -39,6 +39,7 @@ impl HealthManager {
                 overall = HealthState::Degraded;
             }
         }
+
         overall
     }
 }
@@ -143,15 +144,15 @@ mod tests {
 
     #[test]
     fn stale_heartbeat_fails_health() {
-        let start: Instant = Instant::now();
-        let mut registry: ApplicationRegistry = ApplicationRegistry::default();
-        let app: ApplicationId = ApplicationId::from("navigation");
+        let start = Instant::now();
+        let mut registry = ApplicationRegistry::default();
+        let app = ApplicationId::from("navigation");
         registry.register(app.clone(), start);
         registry
             .update_heartbeat(&app, HealthState::Healthy, SystemMode::Startup, start)
             .unwrap();
 
-        let manager: HealthManager = HealthManager::new(Duration::from_secs(1));
+        let manager = HealthManager::new(Duration::from_secs(1));
         assert_eq!(
             manager.calculate(&registry, start + Duration::from_secs(2)),
             HealthState::Failed

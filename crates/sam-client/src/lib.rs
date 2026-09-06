@@ -8,6 +8,10 @@ use sam_transport::{
 };
 use tokio::io::{ReadHalf, WriteHalf};
 
+mod runtime;
+
+pub use runtime::{ApplicationRuntime, ModeHandler, RuntimeConfig, RuntimeError};
+
 /// A connected, application-facing SAM client.
 pub struct SamClient {
     application: ApplicationId,

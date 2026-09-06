@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::{FramedConnection, LocalEndpoint, TransportError};
@@ -8,18 +10,25 @@ pub type PlatformServerStream = UnixStream;
 /// Listens on a Unix domain socket. Unlike the Windows named-pipe listener,
 /// a single bound socket can accept any number of client connections without
 /// needing to be re-armed between them.
+///
+/// Removes its socket file when dropped, so a clean shutdown never leaves a
+/// stale path behind for the next `bind` to trip over. A crash still leaves
+/// the file in place (`Drop` doesn't run), which is why `bind` itself refuses
+/// to reuse an existing path rather than assuming it's safe to unlink.
 pub struct LocalListener {
     listener: UnixListener,
+    socket_path: PathBuf,
 }
 
 impl LocalListener {
     /// Binds the socket at `endpoint`'s path. Fails if a file already exists
-    /// there (e.g. a stale socket left behind by a previous run that didn't
-    /// clean up) — the caller is responsible for removing it first if that's
-    /// the desired behavior.
+    /// there (e.g. a stale socket left behind by a process that didn't shut
+    /// down cleanly) — the caller is responsible for removing it first if
+    /// that's the desired behavior.
     pub fn bind(endpoint: &LocalEndpoint) -> Result<Self, TransportError> {
         Ok(Self {
             listener: UnixListener::bind(endpoint.as_path())?,
+            socket_path: endpoint.as_path().to_path_buf(),
         })
     }
 
@@ -28,6 +37,12 @@ impl LocalListener {
     ) -> Result<FramedConnection<PlatformServerStream>, TransportError> {
         let (stream, _) = self.listener.accept().await?;
         Ok(FramedConnection::new(stream))
+    }
+}
+
+impl Drop for LocalListener {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 
@@ -43,31 +58,19 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// Removes the socket file on drop so a test never leaves behind state
-    /// that could make a later run of `bind` fail with "address in use".
-    struct SocketGuard(LocalEndpoint);
-
-    impl Drop for SocketGuard {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(self.0.as_path());
-        }
-    }
-
-    fn unique_endpoint(tag: &str) -> (LocalEndpoint, SocketGuard) {
+    fn unique_endpoint(tag: &str) -> LocalEndpoint {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "sam-transport-test-{tag}-{}-{id}.sock",
             std::process::id()
         ));
-        let endpoint = LocalEndpoint::new(path.to_string_lossy().into_owned());
-        let guard = SocketGuard(endpoint.clone());
-        (endpoint, guard)
+        LocalEndpoint::new(path.to_string_lossy().into_owned())
     }
 
     #[tokio::test]
     async fn accepted_connection_exchanges_frames_with_the_client() {
-        let (endpoint, _guard) = unique_endpoint("echo");
+        let endpoint = unique_endpoint("echo");
         let mut listener = LocalListener::bind(&endpoint).unwrap();
 
         let server = tokio::spawn(async move {
@@ -86,7 +89,7 @@ mod tests {
 
     #[tokio::test]
     async fn listener_accepts_multiple_clients_without_rebinding() {
-        let (endpoint, _guard) = unique_endpoint("multi");
+        let endpoint = unique_endpoint("multi");
         let mut listener = LocalListener::bind(&endpoint).unwrap();
 
         let _first_client = connect(&endpoint).await.unwrap();
@@ -98,12 +101,23 @@ mod tests {
 
     #[test]
     fn bind_fails_when_socket_file_already_exists() {
-        let (endpoint, _guard) = unique_endpoint("conflict");
-        let _first = LocalListener::bind(&endpoint).unwrap();
+        let endpoint = unique_endpoint("conflict");
+        let first = LocalListener::bind(&endpoint).unwrap();
 
         assert!(matches!(
             LocalListener::bind(&endpoint),
             Err(TransportError::Io(_))
         ));
+        drop(first);
+    }
+
+    #[test]
+    fn dropping_the_listener_removes_its_socket_file() {
+        let endpoint = unique_endpoint("cleanup");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        assert!(endpoint.as_path().exists());
+
+        drop(listener);
+        assert!(!endpoint.as_path().exists());
     }
 }

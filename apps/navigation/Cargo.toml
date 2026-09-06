@@ -1,0 +1,11 @@
+[package]
+name = "navigation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sam-client = { path = "../../crates/sam-client" }
+sam-demo-app = { path = "../../crates/sam-demo-app" }
+tokio.workspace = true
+

@@ -67,6 +67,11 @@ pub enum SamToApplication {
         mode: SystemMode,
         health: HealthState,
     },
+    /// Added at the end to preserve Postcard's existing enum discriminants.
+    RegisterRejected {
+        supported_protocol_version: u16,
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -78,8 +83,9 @@ mod tests {
     }
 
     /// Every message variant must survive a JSON serialize/deserialize round
-    /// trip unchanged, since this is how the message would actually cross the
-    /// wire between SAM and an application.
+    /// trip unchanged. This doesn't exercise the actual Postcard wire format
+    /// (see `sam_transport::frame` for that), but it does verify every field
+    /// on every variant serializes and deserializes back to an equal value.
     fn assert_json_round_trip<T>(value: T)
     where
         T: Serialize + for<'de> Deserialize<'de> + PartialEq + std::fmt::Debug,
@@ -137,6 +143,10 @@ mod tests {
         assert_json_round_trip(SamToApplication::StateBroadcast {
             mode: SystemMode::Standby,
             health: HealthState::Failed,
+        });
+        assert_json_round_trip(SamToApplication::RegisterRejected {
+            supported_protocol_version: 1,
+            reason: "unsupported protocol version 0".to_string(),
         });
     }
 

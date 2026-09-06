@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "async-trait"
+version = "0.1.92"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atomic-polyfill"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -49,6 +60,15 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "guidance"
+version = "0.1.0"
+dependencies = [
+ "sam-client",
+ "sam-demo-app",
+ "tokio",
+]
 
 [[package]]
 name = "hash32"
@@ -112,6 +132,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigation"
+version = "0.1.0"
+dependencies = [
+ "sam-client",
+ "sam-demo-app",
+ "tokio",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -161,8 +190,8 @@ dependencies = [
 name = "sam"
 version = "0.1.0"
 dependencies = [
- "sam-core",
  "sam-protocol",
+ "sam-service",
  "sam-transport",
  "tokio",
 ]
@@ -171,8 +200,10 @@ dependencies = [
 name = "sam-client"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "sam-protocol",
  "sam-transport",
+ "thiserror",
  "tokio",
 ]
 
@@ -185,11 +216,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "sam-demo-app"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "sam-client",
+ "sam-protocol",
+]
+
+[[package]]
 name = "sam-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sam-service"
+version = "0.1.0"
+dependencies = [
+ "sam-core",
+ "sam-protocol",
+ "sam-transport",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -291,6 +342,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "telemetry"
+version = "0.1.0"
+dependencies = [
+ "sam-client",
+ "sam-demo-app",
+ "tokio",
 ]
 
 [[package]]

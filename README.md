@@ -8,8 +8,11 @@ separate crates so transport and policy can evolve independently.
 
 - `sam-protocol`: IPC-safe shared types and messages.
 - `sam-transport`: framed local IPC over Unix sockets or Windows named pipes.
+- `sam-service`: connection lifecycle and orchestration between IPC and core state.
 - `sam-core`: registry, health aggregation, system state, and mode transitions.
 - `sam-client`: connected application-facing API.
+- `sam-demo-app`: shared mock behavior used only by the example executables.
+- `navigation`, `guidance`, and `telemetry`: runnable SAM client processes.
 - `apps/sam`: small executable composition root.
 
 ## Current transition protocol
@@ -40,16 +43,65 @@ The public transport API is platform neutral:
 Default endpoints are `/tmp/sam.sock` on Unix and `\\.\pipe\sam` on Windows.
 Production Linux deployments should normally pass a configured path under
 `/run`, whose directory permissions can restrict which applications connect.
-On Unix, SAM intentionally does not delete an existing socket path. The service
-manager should remove a stale socket only after confirming no SAM instance is
-running. Windows clients retry briefly while the named pipe is busy or starting.
+On Unix, `LocalListener` removes its socket file when dropped, so a clean
+shutdown never leaves a stale path behind. `bind` still refuses to reuse an
+existing path rather than assuming it's safe to unlink, since a crash (where
+`Drop` never runs) can still leave one behind; the service manager should
+remove such a stale socket only after confirming no SAM instance is running.
+Windows clients retry briefly while the named pipe is busy or starting.
 
-The current executable accepts and decodes concurrent connections. Wiring those
-messages into the registry and state managers is the next orchestration layer.
+The service now requires registration as the first message, validates protocol
+versions, binds every later message to the registered application identity, and
+uses per-connection generation IDs so an old disconnected session cannot remove
+a newer replacement session. A bounded outbound queue prevents an unresponsive
+client from causing unbounded memory growth.
+
+A 100 ms health-monitor task recalculates aggregate health even when no new
+messages arrive, so an expired heartbeat changes system health to `Failed` and
+triggers a state broadcast.
+
+`SamService::request_mode` begins a coordinated transition. It broadcasts
+`PrepareMode`, routes ready/rejected responses into `ModeManager`, broadcasts
+`CommitMode` after every participant is ready, and makes the new system mode
+authoritative only after every `ModeCommitted` response arrives.
 
 Postcard encodes enum variants by their declaration order. Treat the existing
 variant order as wire ABI: append new variants, do not reorder or remove them
 within a protocol version.
+
+## Run the multi-process demonstration
+
+Open four terminals from the workspace root:
+
+```bash
+cargo run -p sam
+cargo run -p navigation
+cargo run -p guidance
+cargo run -p telemetry
+```
+
+The SAM console accepts:
+
+```text
+status
+applications
+startup
+standby
+working
+help
+quit
+```
+
+To exercise the rejection path, start telemetry with:
+
+```bash
+cargo run -p telemetry -- --reject-working
+```
+
+To exercise health aggregation, any demo application accepts `--degraded` or
+`--failed`. The reusable application runtime registers, validates the protocol
+version, sends a heartbeat every 500 ms, responds to mode messages through a
+`ModeHandler`, and reconnects after transient transport failures.
 
 ## Run the checks
 

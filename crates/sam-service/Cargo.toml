@@ -1,12 +1,13 @@
 [package]
-name = "sam-client"
+name = "sam-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+sam-core = { path = "../sam-core" }
 sam-protocol = { path = "../sam-protocol" }
 sam-transport = { path = "../sam-transport" }
-tokio.workspace = true
-async-trait.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+

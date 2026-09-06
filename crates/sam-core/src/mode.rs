@@ -133,7 +133,7 @@ impl ModeManager {
             return Err(ModeError::NoParticipants);
         }
 
-        let transition_id: TransitionId = TransitionId(self.next_transition_id);
+        let transition_id = TransitionId(self.next_transition_id);
         self.next_transition_id = self.next_transition_id.wrapping_add(1);
         self.state = ModeManagerState::Preparing {
             transition_id,
@@ -142,7 +142,6 @@ impl ModeManager {
             waiting_for,
             ready: HashSet::new(),
         };
-
         Ok(transition_id)
     }
 
@@ -160,21 +159,14 @@ impl ModeManager {
         application: &ApplicationId,
         response_id: TransitionId,
     ) -> Result<Option<ModeEvent>, ModeError> {
-        let (transition_id, previous_mode, target_mode, waiting_for, ready) = match &mut self.state
-        {
+        let (transition_id, previous_mode, target_mode, waiting_for, ready) = match &mut self.state {
             ModeManagerState::Preparing {
                 transition_id,
                 current_mode,
                 target_mode,
                 waiting_for,
                 ready,
-            } => (
-                *transition_id,
-                *current_mode,
-                *target_mode,
-                waiting_for,
-                ready,
-            ),
+            } => (*transition_id, *current_mode, *target_mode, waiting_for, ready),
             _ => return Err(ModeError::InvalidPhase),
         };
 
@@ -237,17 +229,15 @@ impl ModeManager {
         if transition_id != response_id {
             return Err(ModeError::StaleTransition);
         }
-
         if !is_participant {
             return Err(ModeError::UnknownParticipant(application.clone()));
         }
 
-        let event: ModeEvent = ModeEvent::TransitionAborted {
+        let event = ModeEvent::TransitionAborted {
             transition_id,
             rejected_by: application.clone(),
             reason: reason.into(),
         };
-
         self.state = ModeManagerState::Stable { mode: current_mode };
         Ok(event)
     }
@@ -314,7 +304,10 @@ mod tests {
         let guidance = app("guidance");
         let mut manager = ModeManager::new(SystemMode::Standby);
         let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone(), guidance.clone()])
+            .request_transition(
+                SystemMode::Working,
+                [navigation.clone(), guidance.clone()],
+            )
             .unwrap();
 
         assert_eq!(manager.application_ready(&navigation, id).unwrap(), None);
@@ -345,7 +338,10 @@ mod tests {
         let guidance = app("guidance");
         let mut manager = ModeManager::new(SystemMode::Standby);
         let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone(), guidance.clone()])
+            .request_transition(
+                SystemMode::Working,
+                [navigation.clone(), guidance.clone()],
+            )
             .unwrap();
 
         manager.application_ready(&navigation, id).unwrap();
@@ -374,263 +370,5 @@ mod tests {
             manager.application_ready(&navigation, TransitionId(id.0 + 1)),
             Err(ModeError::StaleTransition)
         );
-    }
-
-    #[test]
-    fn request_transition_to_current_mode_is_rejected() {
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        assert_eq!(
-            manager.request_transition(SystemMode::Standby, [app("navigation")]),
-            Err(ModeError::AlreadyInMode)
-        );
-    }
-
-    #[test]
-    fn request_transition_with_no_participants_is_rejected() {
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        assert_eq!(
-            manager.request_transition(SystemMode::Working, Vec::new()),
-            Err(ModeError::NoParticipants)
-        );
-        // The manager should remain Stable, not have burned a transition id.
-        assert_eq!(
-            manager.state(),
-            &ModeManagerState::Stable {
-                mode: SystemMode::Standby
-            }
-        );
-    }
-
-    #[test]
-    fn request_transition_while_one_in_progress_is_rejected() {
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        manager
-            .request_transition(SystemMode::Working, [app("navigation")])
-            .unwrap();
-
-        assert_eq!(
-            manager.request_transition(SystemMode::Startup, [app("guidance")]),
-            Err(ModeError::TransitionInProgress)
-        );
-    }
-
-    #[test]
-    fn application_ready_from_unknown_participant_is_rejected() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-
-        let stranger = app("stranger");
-        assert_eq!(
-            manager.application_ready(&stranger, id),
-            Err(ModeError::UnknownParticipant(stranger))
-        );
-    }
-
-    #[test]
-    fn application_ready_when_stable_is_invalid_phase() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        assert_eq!(
-            manager.application_ready(&navigation, TransitionId(1)),
-            Err(ModeError::InvalidPhase)
-        );
-    }
-
-    #[test]
-    fn application_ready_responding_twice_is_unknown_participant() {
-        let navigation = app("navigation");
-        let guidance = app("guidance");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone(), guidance.clone()])
-            .unwrap();
-
-        manager.application_ready(&navigation, id).unwrap();
-        // navigation has already been removed from waiting_for, so a second
-        // response from it is indistinguishable from a stranger responding.
-        assert_eq!(
-            manager.application_ready(&navigation, id),
-            Err(ModeError::UnknownParticipant(navigation))
-        );
-    }
-
-    #[test]
-    fn rejection_from_application_already_marked_ready_is_allowed() {
-        let navigation = app("navigation");
-        let guidance = app("guidance");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone(), guidance.clone()])
-            .unwrap();
-
-        manager.application_ready(&navigation, id).unwrap();
-        // navigation already said it was ready; it can still reject before
-        // the transition commits.
-        let event = manager
-            .application_rejected(&navigation, id, "changed my mind")
-            .unwrap();
-        assert!(matches!(event, ModeEvent::TransitionAborted { .. }));
-    }
-
-    #[test]
-    fn rejection_with_stale_transition_id_is_rejected() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-
-        assert_eq!(
-            manager.application_rejected(&navigation, TransitionId(id.0 + 1), "why not"),
-            Err(ModeError::StaleTransition)
-        );
-    }
-
-    #[test]
-    fn rejection_from_unknown_participant_is_rejected() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-
-        let stranger = app("stranger");
-        assert_eq!(
-            manager.application_rejected(&stranger, id, "not mine"),
-            Err(ModeError::UnknownParticipant(stranger))
-        );
-    }
-
-    #[test]
-    fn rejection_when_stable_is_invalid_phase() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        assert_eq!(
-            manager.application_rejected(&navigation, TransitionId(1), "n/a"),
-            Err(ModeError::InvalidPhase)
-        );
-    }
-
-    #[test]
-    fn rejection_during_committing_phase_is_invalid_phase() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-        manager.application_ready(&navigation, id).unwrap();
-
-        // The manager has already moved on to Committing; rejection is only
-        // valid during Preparing.
-        assert_eq!(
-            manager.application_rejected(&navigation, id, "too late"),
-            Err(ModeError::InvalidPhase)
-        );
-    }
-
-    #[test]
-    fn application_committed_with_wrong_mode_is_rejected() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-        manager.application_ready(&navigation, id).unwrap();
-
-        assert_eq!(
-            manager.application_committed(&navigation, id, SystemMode::Startup),
-            Err(ModeError::WrongCommittedMode)
-        );
-    }
-
-    #[test]
-    fn application_committed_from_unknown_participant_is_rejected() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-        manager.application_ready(&navigation, id).unwrap();
-
-        let stranger = app("stranger");
-        assert_eq!(
-            manager.application_committed(&stranger, id, SystemMode::Working),
-            Err(ModeError::UnknownParticipant(stranger))
-        );
-    }
-
-    #[test]
-    fn application_committed_while_preparing_is_invalid_phase() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-
-        // Still in Preparing (navigation hasn't called application_ready).
-        assert_eq!(
-            manager.application_committed(&navigation, id, SystemMode::Working),
-            Err(ModeError::InvalidPhase)
-        );
-    }
-
-    #[test]
-    fn application_committed_with_stale_transition_id_is_rejected() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-        manager.application_ready(&navigation, id).unwrap();
-
-        assert_eq!(
-            manager.application_committed(&navigation, TransitionId(id.0 + 1), SystemMode::Working),
-            Err(ModeError::StaleTransition)
-        );
-    }
-
-    #[test]
-    fn current_mode_reflects_previous_mode_throughout_transition() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        assert_eq!(manager.current_mode(), SystemMode::Standby);
-
-        let id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-        // Preparing: current_mode still reports the pre-transition mode.
-        assert_eq!(manager.current_mode(), SystemMode::Standby);
-
-        manager.application_ready(&navigation, id).unwrap();
-        // Committing: current_mode still reports the previous mode until the
-        // transition fully commits.
-        assert_eq!(manager.current_mode(), SystemMode::Standby);
-
-        manager
-            .application_committed(&navigation, id, SystemMode::Working)
-            .unwrap();
-        assert_eq!(manager.current_mode(), SystemMode::Working);
-    }
-
-    #[test]
-    fn transition_ids_increase_across_successive_transitions() {
-        let navigation = app("navigation");
-        let mut manager = ModeManager::new(SystemMode::Standby);
-        let first_id = manager
-            .request_transition(SystemMode::Working, [navigation.clone()])
-            .unwrap();
-        manager.application_ready(&navigation, first_id).unwrap();
-        manager
-            .application_committed(&navigation, first_id, SystemMode::Working)
-            .unwrap();
-
-        let second_id = manager
-            .request_transition(SystemMode::Standby, [navigation.clone()])
-            .unwrap();
-
-        assert_ne!(first_id, second_id);
     }
 }

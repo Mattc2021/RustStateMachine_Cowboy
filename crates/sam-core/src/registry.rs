@@ -5,7 +5,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RegistryError {
-    #[error("Application is not registered: {0:?}")]
+    #[error("application is not registered: {0:?}")]
     NotRegistered(ApplicationId),
 }
 
@@ -51,7 +51,7 @@ impl ApplicationRegistry {
     /// removing it from the registry, so its last-known status remains
     /// visible until it re-registers or heartbeats again.
     pub fn mark_disconnected(&mut self, application: &ApplicationId) -> Result<(), RegistryError> {
-        let status: &mut ApplicationStatus = self
+        let status = self
             .applications
             .get_mut(application)
             .ok_or_else(|| RegistryError::NotRegistered(application.clone()))?;
@@ -68,7 +68,7 @@ impl ApplicationRegistry {
         mode: SystemMode,
         now: Instant,
     ) -> Result<(), RegistryError> {
-        let status: &mut ApplicationStatus = self
+        let status = self
             .applications
             .get_mut(application)
             .ok_or_else(|| RegistryError::NotRegistered(application.clone()))?;

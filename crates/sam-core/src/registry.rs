@@ -79,6 +79,21 @@ impl ApplicationRegistry {
         Ok(())
     }
 
+    /// Records a successfully committed mode immediately rather than waiting
+    /// for the application's next heartbeat to make the registry consistent.
+    pub fn set_mode(
+        &mut self,
+        application: &ApplicationId,
+        mode: SystemMode,
+    ) -> Result<(), RegistryError> {
+        let status = self
+            .applications
+            .get_mut(application)
+            .ok_or_else(|| RegistryError::NotRegistered(application.clone()))?;
+        status.current_mode = mode;
+        Ok(())
+    }
+
     pub fn get(&self, application: &ApplicationId) -> Option<&ApplicationStatus> {
         self.applications.get(application)
     }
@@ -183,6 +198,19 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(result, Err(RegistryError::NotRegistered(app("unknown"))));
+    }
+
+    #[test]
+    fn set_mode_updates_mode_without_changing_heartbeat_time() {
+        let now = Instant::now();
+        let mut registry = ApplicationRegistry::default();
+        let navigation = app("navigation");
+        registry.register(navigation.clone(), now);
+
+        registry.set_mode(&navigation, SystemMode::Standby).unwrap();
+        let status = registry.get(&navigation).unwrap();
+        assert_eq!(status.current_mode, SystemMode::Standby);
+        assert_eq!(status.last_heartbeat, now);
     }
 
     #[test]

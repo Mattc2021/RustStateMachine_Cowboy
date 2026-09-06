@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use tokio::net::{UnixListener, UnixStream};
+use tracing::debug;
 
 use crate::{FramedConnection, LocalEndpoint, TransportError};
 
@@ -26,6 +27,7 @@ impl LocalListener {
     /// down cleanly) — the caller is responsible for removing it first if
     /// that's the desired behavior.
     pub fn bind(endpoint: &LocalEndpoint) -> Result<Self, TransportError> {
+        debug!(endpoint = %endpoint.as_str(), "binding Unix-domain socket");
         Ok(Self {
             listener: UnixListener::bind(endpoint.as_path())?,
             socket_path: endpoint.as_path().to_path_buf(),
@@ -49,6 +51,7 @@ impl Drop for LocalListener {
 pub async fn connect(
     endpoint: &LocalEndpoint,
 ) -> Result<FramedConnection<PlatformClientStream>, TransportError> {
+    debug!(endpoint = %endpoint.as_str(), "connecting Unix-domain socket");
     let stream = UnixStream::connect(endpoint.as_path()).await?;
     Ok(FramedConnection::new(stream))
 }

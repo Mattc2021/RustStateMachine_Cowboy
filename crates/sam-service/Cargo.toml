@@ -10,4 +10,4 @@ sam-protocol = { path = "../sam-protocol" }
 sam-transport = { path = "../sam-transport" }
 thiserror.workspace = true
 tokio.workspace = true
-
+tracing.workspace = true

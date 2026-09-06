@@ -10,6 +10,7 @@ use tokio::{
     sync::mpsc,
     time::{sleep, timeout},
 };
+use tracing::{debug, info, trace, warn};
 
 use crate::SamClient;
 
@@ -38,6 +39,17 @@ pub trait ModeHandler: Send {
     /// application that can't apply a mode it already agreed was ready has
     /// no well-defined state to continue from.
     async fn commit_mode(&mut self, mode: SystemMode) -> Result<(), String>;
+
+    /// Reconciles a newly connected application with SAM's authoritative
+    /// mode before the runtime starts heartbeating. Applications may
+    /// override this when restart recovery differs from a normal transition.
+    async fn synchronize_mode(&mut self, authoritative_mode: SystemMode) -> Result<(), String> {
+        if self.current_mode() == authoritative_mode {
+            return Ok(());
+        }
+        self.prepare_mode(authoritative_mode).await?;
+        self.commit_mode(authoritative_mode).await
+    }
 
     /// Called when a transition this application was part of was aborted
     /// (by another participant's rejection). Default is a no-op.
@@ -87,6 +99,8 @@ pub enum RuntimeError {
     ConnectionClosed,
     #[error("application failed to commit mode: {0}")]
     CommitFailed(String),
+    #[error("application could not synchronize with SAM's {mode:?} mode: {reason}")]
+    InitialSynchronizationFailed { mode: SystemMode, reason: String },
 }
 
 /// Keeps a `ModeHandler` connected to SAM: registers, heartbeats on
@@ -114,13 +128,13 @@ impl ApplicationRuntime {
         loop {
             match self.run_session(handler).await {
                 Err(error @ RuntimeError::RegistrationRejected { .. })
-                | Err(error @ RuntimeError::ProtocolVersionMismatch { .. }) => return Err(error),
+                | Err(error @ RuntimeError::ProtocolVersionMismatch { .. })
+                | Err(error @ RuntimeError::InitialSynchronizationFailed { .. }) => {
+                    return Err(error)
+                }
                 Ok(()) => sleep(self.config.reconnect_delay).await,
                 Err(error) => {
-                    eprintln!(
-                        "{} disconnected from SAM: {error}; retrying",
-                        self.application.0
-                    );
+                    warn!(application = %self.application.0, %error, "SAM session ended; retrying");
                     sleep(self.config.reconnect_delay).await;
                 }
             }
@@ -131,7 +145,9 @@ impl ApplicationRuntime {
     /// closes or a protocol error occurs. A clean return (`Ok`) still means
     /// the session ended — `run` decides whether/when to reconnect.
     async fn run_session<H: ModeHandler>(&self, handler: &mut H) -> Result<(), RuntimeError> {
+        debug!(application = %self.application.0, endpoint = %self.config.endpoint.as_str(), "connecting to SAM");
         let mut client = SamClient::connect(self.application.clone(), &self.config.endpoint).await?;
+        debug!(application = %self.application.0, "transport connected; registering");
         client.register().await?;
 
         let registration = timeout(self.config.registration_timeout, client.next_message())
@@ -149,6 +165,24 @@ impl ApplicationRuntime {
                         received: protocol_version,
                         supported: PROTOCOL_VERSION,
                     });
+                }
+                info!(
+                    application = %self.application.0,
+                    authoritative_mode = ?current_mode,
+                    system_health = ?system_health,
+                    "registration accepted"
+                );
+                if handler.current_mode() != current_mode {
+                    info!(
+                        application = %self.application.0,
+                        local_mode = ?handler.current_mode(),
+                        authoritative_mode = ?current_mode,
+                        "synchronizing application mode after registration"
+                    );
+                    handler.synchronize_mode(current_mode).await.map_err(|reason| {
+                        RuntimeError::InitialSynchronizationFailed { mode: current_mode, reason }
+                    })?;
+                    info!(application = %self.application.0, mode = ?current_mode, "initial mode synchronization complete");
                 }
                 handler
                     .system_state_changed(current_mode, system_health)
@@ -184,25 +218,42 @@ impl ApplicationRuntime {
         loop {
             tokio::select! {
                 _ = heartbeat.tick() => {
+                    trace!(
+                        application = %self.application.0,
+                        mode = ?handler.current_mode(),
+                        health = ?handler.health(),
+                        "sending heartbeat"
+                    );
                     sender.heartbeat(handler.health(), handler.current_mode()).await?;
                 }
                 incoming = inbound_rx.recv() => {
                     let message = incoming.ok_or(RuntimeError::ConnectionClosed)??;
                     match message {
                         SamToApplication::PrepareMode { transition_id, requested_mode } => {
+                            info!(application = %self.application.0, ?transition_id, mode = ?requested_mode, "received mode preparation request");
                             match handler.prepare_mode(requested_mode).await {
-                                Ok(()) => sender.mode_ready(transition_id).await?,
-                                Err(reason) => sender.mode_rejected(transition_id, reason).await?,
+                                Ok(()) => {
+                                    info!(application = %self.application.0, ?transition_id, "application is ready for transition");
+                                    sender.mode_ready(transition_id).await?
+                                }
+                                Err(reason) => {
+                                    warn!(application = %self.application.0, ?transition_id, %reason, "application rejected transition");
+                                    sender.mode_rejected(transition_id, reason).await?
+                                }
                             }
                         }
                         SamToApplication::CommitMode { transition_id, mode } => {
+                            info!(application = %self.application.0, ?transition_id, ?mode, "committing application mode");
                             handler.commit_mode(mode).await.map_err(RuntimeError::CommitFailed)?;
                             sender.mode_committed(transition_id, mode).await?;
+                            info!(application = %self.application.0, ?transition_id, ?mode, "mode commit confirmed to SAM");
                         }
                         SamToApplication::AbortMode { transition_id } => {
+                            warn!(application = %self.application.0, ?transition_id, "transition aborted by SAM");
                             handler.abort_mode(transition_id).await;
                         }
                         SamToApplication::StateBroadcast { mode, health } => {
+                            debug!(application = %self.application.0, ?mode, ?health, "received system state broadcast");
                             handler.system_state_changed(mode, health).await;
                         }
                         SamToApplication::RegisterAccepted { .. }
@@ -254,9 +305,19 @@ mod tests {
         }
     }
 
-    #[derive(Default, Clone)]
+    #[derive(Clone)]
     struct RecordingHandler {
         state_changes: Arc<Mutex<Vec<(SystemMode, HealthState)>>>,
+        current_mode: Arc<Mutex<SystemMode>>,
+    }
+
+    impl Default for RecordingHandler {
+        fn default() -> Self {
+            Self {
+                state_changes: Arc::new(Mutex::new(Vec::new())),
+                current_mode: Arc::new(Mutex::new(SystemMode::Startup)),
+            }
+        }
     }
 
     #[async_trait]
@@ -266,14 +327,15 @@ mod tests {
         }
 
         fn current_mode(&self) -> SystemMode {
-            SystemMode::Startup
+            *self.current_mode.lock().unwrap()
         }
 
         async fn prepare_mode(&mut self, _requested: SystemMode) -> Result<(), String> {
             Ok(())
         }
 
-        async fn commit_mode(&mut self, _mode: SystemMode) -> Result<(), String> {
+        async fn commit_mode(&mut self, mode: SystemMode) -> Result<(), String> {
+            *self.current_mode.lock().unwrap() = mode;
             Ok(())
         }
 
@@ -375,5 +437,6 @@ mod tests {
             *handler.state_changes.lock().unwrap(),
             vec![(SystemMode::Standby, HealthState::Degraded)]
         );
+        assert_eq!(*handler.current_mode.lock().unwrap(), SystemMode::Standby);
     }
 }

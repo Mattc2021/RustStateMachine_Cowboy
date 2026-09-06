@@ -4,6 +4,7 @@ use tokio::{
     net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
     time::{sleep, Instant},
 };
+use tracing::{debug, trace};
 
 use crate::{FramedConnection, LocalEndpoint, TransportError};
 
@@ -38,6 +39,7 @@ impl LocalListener {
             .into());
         }
 
+        debug!(endpoint = %endpoint.as_str(), "binding Windows named pipe");
         let pending = ServerOptions::new()
             .first_pipe_instance(true)
             .create(endpoint.as_str())?;
@@ -72,8 +74,12 @@ pub async fn connect(
     let deadline = Instant::now() + CONNECT_TIMEOUT;
 
     loop {
+        trace!(endpoint = %endpoint.as_str(), "attempting Windows named-pipe connection");
         match ClientOptions::new().open(endpoint.as_str()) {
-            Ok(client) => return Ok(FramedConnection::new(client)),
+            Ok(client) => {
+                debug!(endpoint = %endpoint.as_str(), "Windows named-pipe connection established");
+                return Ok(FramedConnection::new(client));
+            }
             Err(error) if retryable(&error) && Instant::now() < deadline => {
                 sleep(RETRY_DELAY).await;
             }

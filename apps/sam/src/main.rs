@@ -9,15 +9,18 @@ use sam_protocol::SystemMode;
 use sam_service::{SamServer, SamService};
 use sam_transport::LocalEndpoint;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    init_logging();
     let endpoint = LocalEndpoint::default();
     let service = SamService::new(Duration::from_secs(2));
     let mut server_task = tokio::spawn(SamServer::new(endpoint.clone(), service.clone()).run());
     let mut commands = BufReader::new(tokio::io::stdin()).lines();
 
-    println!("SAM listening on {}", endpoint.as_str());
+    info!(endpoint = %endpoint.as_str(), "SAM process started");
     print_help();
     loop {
         tokio::select! {
@@ -48,22 +51,22 @@ fn handle_command(command: &str, service: &SamService) -> bool {
         "help" => print_help(),
         "quit" | "exit" => return false,
         "" => {}
-        other => eprintln!("unknown command: {other}"),
+        other => error!(command = other, "unknown console command"),
     }
     true
 }
 
 fn request_mode(service: &SamService, target: SystemMode) {
     match service.request_mode(target) {
-        Ok(id) => println!("requested {target:?} as transition {id:?}"),
-        Err(error) => eprintln!("mode request rejected: {error}"),
+        Ok(id) => info!(?target, ?id, "operator requested mode transition"),
+        Err(error) => error!(%error, ?target, "mode request rejected"),
     }
 }
 
 fn print_status(service: &SamService) {
     match service.snapshot() {
         Ok(state) => println!("system: {:?} + {:?}", state.mode, state.health),
-        Err(error) => eprintln!("status unavailable: {error}"),
+        Err(error) => error!(%error, "status unavailable"),
     }
 }
 
@@ -73,16 +76,18 @@ fn print_applications(service: &SamService) {
         Ok(applications) => {
             for app in applications {
                 println!(
-                    "{}: mode={:?}, health={:?}, connected={}, heartbeat_age={}ms",
+                    "{}: mode={:?}, reported_health={:?}, effective_health={:?}, connected={}, synchronized={}, heartbeat_age={}ms",
                     app.application.0,
                     app.current_mode,
                     app.health,
+                    app.effective_health,
                     app.connected,
+                    app.synchronized,
                     app.heartbeat_age.as_millis(),
                 );
             }
         }
-        Err(error) => eprintln!("application registry unavailable: {error}"),
+        Err(error) => error!(%error, "application registry unavailable"),
     }
 }
 
@@ -90,4 +95,13 @@ fn print_help() {
     println!("commands: status | applications | startup | standby | working | help | quit");
     print!("sam> ");
     let _ = io::stdout().flush();
+}
+
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .init();
 }

@@ -9,3 +9,5 @@ sam-service = { path = "../../crates/sam-service" }
 sam-protocol = { path = "../../crates/sam-protocol" }
 sam-transport = { path = "../../crates/sam-transport" }
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

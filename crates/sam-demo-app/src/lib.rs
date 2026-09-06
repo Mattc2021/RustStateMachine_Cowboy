@@ -7,6 +7,19 @@
 use async_trait::async_trait;
 use sam_client::ModeHandler;
 use sam_protocol::{HealthState, SystemMode, TransitionId};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
+
+/// Installs a compact logger. Set `RUST_LOG=debug` or `RUST_LOG=trace` for
+/// connection details or individual heartbeat/wire-message diagnostics.
+pub fn init_logging() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .try_init();
+}
 
 /// A `ModeHandler` that logs every callback and always agrees to prepare and
 /// commit mode changes, unless `reject_working` is set — in which case it
@@ -31,8 +44,9 @@ impl ModeHandler for DemoHandler {
     fn current_mode(&self) -> SystemMode { self.current_mode }
 
     async fn prepare_mode(&mut self, requested: SystemMode) -> Result<(), String> {
-        println!("{} preparing for {requested:?}", self.name);
+        info!(application = self.name, mode = ?requested, "preparing application mode");
         if self.reject_working && requested == SystemMode::Working {
+            warn!(application = self.name, mode = ?requested, "demo policy rejects requested mode");
             Err(format!("{} configured to reject Working", self.name))
         } else {
             Ok(())
@@ -41,16 +55,16 @@ impl ModeHandler for DemoHandler {
 
     async fn commit_mode(&mut self, mode: SystemMode) -> Result<(), String> {
         self.current_mode = mode;
-        println!("{} committed {mode:?}", self.name);
+        info!(application = self.name, ?mode, "application mode committed");
         Ok(())
     }
 
     async fn abort_mode(&mut self, transition_id: TransitionId) {
-        println!("{} aborted transition {transition_id:?}", self.name);
+        warn!(application = self.name, ?transition_id, "application transition aborted");
     }
 
     async fn system_state_changed(&mut self, mode: SystemMode, health: HealthState) {
-        println!("{} sees system state: {mode:?} + {health:?}", self.name);
+        info!(application = self.name, ?mode, ?health, "system state observed");
     }
 }
 

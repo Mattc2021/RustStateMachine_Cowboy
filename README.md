@@ -103,10 +103,50 @@ To exercise health aggregation, any demo application accepts `--degraded` or
 version, sends a heartbeat every 500 ms, responds to mode messages through a
 `ModeHandler`, and reconnects after transient transport failures.
 
+When an application reconnects while SAM is already in another mode, the
+runtime calls `ModeHandler::synchronize_mode` before starting heartbeats. The
+default implementation prepares and commits the authoritative SAM mode. Until
+an application's reported mode matches SAM, it is shown as unsynchronized and
+its effective health is `Degraded`.
+
+## Logging
+
+All processes use structured `tracing` output. Normal lifecycle and transition
+events are visible at the default `info` level. Increase detail with `RUST_LOG`:
+
+Windows Command Prompt:
+
+```bat
+set RUST_LOG=debug
+cargo run -p sam
+```
+
+PowerShell:
+
+```powershell
+$env:RUST_LOG = "debug"
+cargo run -p sam
+```
+
+Linux or WSL:
+
+```bash
+RUST_LOG=debug cargo run -p sam
+```
+
+Use `RUST_LOG=trace` only when diagnosing individual heartbeats or wire
+messages; it is intentionally verbose.
+
 ## Run the checks
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+```
+
+After adding or changing dependencies, update the checked-in lockfile with:
+
+```bash
+cargo generate-lockfile
 ```

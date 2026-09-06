@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use sam_protocol::HealthState;
 
-use crate::ApplicationRegistry;
+use crate::{ApplicationRegistry, ApplicationStatus};
 
 /// Aggregates per-application health into a single system-wide `HealthState`.
 #[derive(Debug, Clone, Copy)]
@@ -27,20 +27,32 @@ impl HealthManager {
         let mut overall = HealthState::Healthy;
 
         for (_, application) in registry.iter() {
-            if !application.connected
-                || now.saturating_duration_since(application.last_heartbeat)
-                    > self.heartbeat_timeout
-                || application.health == HealthState::Failed
-            {
-                return HealthState::Failed;
-            }
-
-            if application.health == HealthState::Degraded {
-                overall = HealthState::Degraded;
+            match self.calculate_application(application, now) {
+                HealthState::Failed => return HealthState::Failed,
+                HealthState::Degraded => overall = HealthState::Degraded,
+                HealthState::Healthy => {}
             }
         }
 
         overall
+    }
+
+    /// Computes the effective health of one application, including
+    /// connectivity and heartbeat age rather than only its last report.
+    pub fn calculate_application(
+        &self,
+        application: &ApplicationStatus,
+        now: Instant,
+    ) -> HealthState {
+        if !application.connected
+            || now.saturating_duration_since(application.last_heartbeat)
+                > self.heartbeat_timeout
+            || application.health == HealthState::Failed
+        {
+            HealthState::Failed
+        } else {
+            application.health
+        }
     }
 }
 
@@ -156,6 +168,23 @@ mod tests {
         assert_eq!(
             manager.calculate(&registry, start + Duration::from_secs(2)),
             HealthState::Failed
+        );
+    }
+
+    #[test]
+    fn application_health_includes_stale_heartbeat() {
+        let start = Instant::now();
+        let mut registry = ApplicationRegistry::default();
+        let navigation = app("navigation");
+        registry.register(navigation.clone(), start);
+        let manager = HealthManager::new(Duration::from_secs(1));
+
+        assert_eq!(
+            manager.calculate_application(
+                registry.get(&navigation).unwrap(),
+                start + Duration::from_secs(2),
+            ),
+            HealthState::Failed,
         );
     }
 }

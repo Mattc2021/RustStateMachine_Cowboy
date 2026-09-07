@@ -71,6 +71,60 @@ within a protocol version.
 
 ## Run the multi-process demonstration
 
+The quickest option builds the workspace once, launches all four processes in
+one terminal, combines their log output, and cleans up the demo applications
+when SAM's automatic sequence finishes.
+
+Windows Command Prompt:
+
+```bat
+scripts\run_demo.cmd
+```
+
+PowerShell:
+
+```powershell
+.\scripts\run_demo.ps1
+```
+
+Linux or WSL:
+
+```bash
+chmod +x scripts/run_demo.sh
+./scripts/run_demo.sh
+```
+
+The launcher runs a presentation-oriented resilience showcase:
+
+1. All applications connect and synchronously enter Standby.
+2. Telemetry abruptly terminates to simulate component power loss.
+3. SAM detects the disconnect and changes overall health to Failed.
+4. The launcher restores telemetry after a visible two-second outage.
+5. Telemetry registers, reconciles its mode, and health returns to Healthy.
+6. A temporary telemetry safety interlock rejects the first Working request,
+   proving that SAM aborts the system-wide transition.
+7. The condition clears, the retry succeeds, and SAM returns to Standby.
+
+Each stage has a prominent log banner, and the launcher prints
+`SHOWCASE PASSED` only after SAM validates the expected outcome. The simpler
+automatic smoke test remains available directly:
+
+```bash
+cargo run -p sam -- --auto-demo
+```
+
+See [`DEMO_GUIDE.md`](DEMO_GUIDE.md) for a short company-demo talk track,
+preflight checklist, expected validations, and troubleshooting notes.
+
+The resilience sequence can also be started with `--auto-showcase`, but its
+power-loss portion expects the launcher to stop and restart telemetry.
+
+Optional SAM flags are `--expected-apps`, `--auto-timeout-secs`, and
+`--auto-hold-ms`. The PowerShell launcher exposes matching parameters; the
+Linux launcher reads `EXPECTED_APPS`, `AUTO_TIMEOUT_SECONDS`, `AUTO_HOLD_MS`,
+`FAULT_AFTER_MS`, and `POWER_OFF_MS` environment variables. The PowerShell
+script exposes equivalent named parameters.
+
 Open four terminals from the workspace root:
 
 ```bash
@@ -97,6 +151,10 @@ To exercise the rejection path, start telemetry with:
 ```bash
 cargo run -p telemetry -- --reject-working
 ```
+
+Demo-only telemetry flags also include `--reject-working-once` and
+`--exit-after-ms N`. They are intentionally implemented in the example layer,
+not in the shared SAM protocol or production client runtime.
 
 To exercise health aggregation, any demo application accepts `--degraded` or
 `--failed`. The reusable application runtime registers, validates the protocol

@@ -4,11 +4,13 @@
 //! `--reject-working` flags this binary understands.
 
 use sam_client::{ApplicationRuntime, RuntimeConfig, RuntimeError};
-use sam_demo_app::{DemoHandler, health_from_args, init_logging, reject_working_from_args};
+use sam_demo_app::{health_from_args, init_logging, reject_working_from_args, DemoHandler};
 
 #[tokio::main]
 async fn main() -> Result<(), RuntimeError> {
     init_logging();
     let mut handler = DemoHandler::new("guidance", reject_working_from_args(), health_from_args());
-    ApplicationRuntime::new("guidance", RuntimeConfig::default()).run(&mut handler).await
+    ApplicationRuntime::new("guidance", RuntimeConfig::default())
+        .run(&mut handler)
+        .await
 }

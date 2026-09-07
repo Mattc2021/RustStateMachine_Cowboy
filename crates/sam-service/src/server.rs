@@ -33,7 +33,11 @@ pub struct SamServer {
 
 impl SamServer {
     pub fn new(endpoint: LocalEndpoint, service: SamService) -> Self {
-        Self { endpoint, service, registration_timeout: Duration::from_secs(5) }
+        Self {
+            endpoint,
+            service,
+            registration_timeout: Duration::from_secs(5),
+        }
     }
 
     /// Binds the endpoint, starts the background health-recalculation loop
@@ -60,7 +64,9 @@ impl SamServer {
             let service = self.service.clone();
             let registration_timeout = self.registration_timeout;
             tokio::spawn(async move {
-                if let Err(error) = serve_connection(connection, service, registration_timeout).await {
+                if let Err(error) =
+                    serve_connection(connection, service, registration_timeout).await
+                {
                     warn!(%error, "SAM connection task ended with an error");
                 }
             });
@@ -76,7 +82,12 @@ async fn serve_connection(
     service: SamService,
     registration_timeout: Duration,
 ) -> Result<(), ServerError> {
-    let first = match timeout(registration_timeout, connection.receive::<ApplicationToSam>()).await {
+    let first = match timeout(
+        registration_timeout,
+        connection.receive::<ApplicationToSam>(),
+    )
+    .await
+    {
         Ok(result) => result?,
         Err(_) => {
             warn!("connection closed after registration timeout");
@@ -85,13 +96,18 @@ async fn serve_connection(
     };
 
     let (application, protocol_version) = match first {
-        ApplicationToSam::Register { application, protocol_version } => (application, protocol_version),
+        ApplicationToSam::Register {
+            application,
+            protocol_version,
+        } => (application, protocol_version),
         _ => {
             warn!("rejecting connection because its first message was not Register");
-            connection.send(&SamToApplication::RegisterRejected {
-                supported_protocol_version: PROTOCOL_VERSION,
-                reason: "first message must be Register".to_owned(),
-            }).await?;
+            connection
+                .send(&SamToApplication::RegisterRejected {
+                    supported_protocol_version: PROTOCOL_VERSION,
+                    reason: "first message must be Register".to_owned(),
+                })
+                .await?;
             return Ok(());
         }
     };
@@ -103,10 +119,12 @@ async fn serve_connection(
             supported_version = PROTOCOL_VERSION,
             "rejecting incompatible protocol version"
         );
-        connection.send(&SamToApplication::RegisterRejected {
-            supported_protocol_version: PROTOCOL_VERSION,
-            reason: format!("unsupported protocol version {protocol_version}"),
-        }).await?;
+        connection
+            .send(&SamToApplication::RegisterRejected {
+                supported_protocol_version: PROTOCOL_VERSION,
+                reason: format!("unsupported protocol version {protocol_version}"),
+            })
+            .await?;
         return Ok(());
     }
 
@@ -122,7 +140,8 @@ async fn serve_connection(
         &mut reader,
         &mut writer,
         &mut outbound_rx,
-    ).await;
+    )
+    .await;
     // Always mark the application disconnected, even if the session ended
     // with an error, so a crashed/dropped connection doesn't leave a stale
     // "connected" entry behind in the registry.
@@ -145,7 +164,6 @@ async fn run_registered_session(
     writer: &mut sam_transport::FramedWriter<tokio::io::WriteHalf<PlatformServerStream>>,
     outbound_rx: &mut mpsc::Receiver<SamToApplication>,
 ) -> Result<(), ServerError> {
-
     loop {
         tokio::select! {
             outgoing = outbound_rx.recv() => match outgoing {

@@ -49,7 +49,10 @@ mod tests {
 
     #[test]
     fn application_id_new_accepts_string_and_str() {
-        assert_eq!(ApplicationId::new("navigation"), ApplicationId::from("navigation"));
+        assert_eq!(
+            ApplicationId::new("navigation"),
+            ApplicationId::from("navigation")
+        );
         assert_eq!(
             ApplicationId::new(String::from("guidance")),
             ApplicationId::from("guidance")

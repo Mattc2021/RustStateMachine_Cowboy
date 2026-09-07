@@ -1,7 +1,17 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
-use sam_core::{ApplicationRegistry, HealthManager, ModeEvent, ModeManager, SystemState};
-use sam_protocol::{ApplicationId, ApplicationToSam, HealthState, SamToApplication, SystemMode, TransitionId, PROTOCOL_VERSION};
+use sam_core::{
+    ApplicationRegistry, HealthManager, ModeError, ModeEvent, ModeManager, ModeManagerState,
+    SystemState,
+};
+use sam_protocol::{
+    ApplicationId, ApplicationToSam, HealthState, SamToApplication, SystemMode, TransitionId,
+    PROTOCOL_VERSION,
+};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
@@ -35,7 +45,10 @@ pub enum ServiceError {
     #[error("connection is no longer active for {0:?}")]
     StaleConnection(ApplicationId),
     #[error("message application {actual:?} does not match registered application {expected:?}")]
-    ApplicationMismatch { expected: ApplicationId, actual: ApplicationId },
+    ApplicationMismatch {
+        expected: ApplicationId,
+        actual: ApplicationId,
+    },
     #[error("registration is only valid as the first message")]
     DuplicateRegistration,
     #[error("mode transition failed: {0}")]
@@ -98,12 +111,16 @@ impl SamService {
         let replacing_connection = state.clients.contains_key(&application);
         state.applications.register(application.clone(), now);
         recalculate_health(&mut state, now);
-        outbound.try_send(SamToApplication::RegisterAccepted {
-            protocol_version: PROTOCOL_VERSION,
-            current_mode: state.system.mode,
-            system_health: state.system.health,
-        }).map_err(|_| ServiceError::StateUnavailable)?;
-        state.clients.insert(application.clone(), ClientConnection { id, outbound });
+        outbound
+            .try_send(SamToApplication::RegisterAccepted {
+                protocol_version: PROTOCOL_VERSION,
+                current_mode: state.system.mode,
+                system_health: state.system.health,
+            })
+            .map_err(|_| ServiceError::StateUnavailable)?;
+        state
+            .clients
+            .insert(application.clone(), ClientConnection { id, outbound });
         info!(
             application = %application.0,
             connection_id = id.0,
@@ -126,7 +143,9 @@ impl SamService {
         now: Instant,
     ) -> Result<(), ServiceError> {
         let mut state = self.lock()?;
-        let active = state.clients.get(application)
+        let active = state
+            .clients
+            .get(application)
             .is_some_and(|client| client.id == connection_id);
         if !active {
             debug!(application = %application.0, connection_id = connection_id.0, "ignoring stale disconnect");
@@ -163,10 +182,16 @@ impl SamService {
         verify_connection(&state, registered, connection_id)?;
         match message {
             ApplicationToSam::Register { .. } => return Err(ServiceError::DuplicateRegistration),
-            ApplicationToSam::Heartbeat { application, health, current_mode } => {
+            ApplicationToSam::Heartbeat {
+                application,
+                health,
+                current_mode,
+            } => {
                 verify_application(registered, &application)?;
                 trace!(application = %application.0, ?health, ?current_mode, "heartbeat received");
-                state.applications.update_heartbeat(&application, health, current_mode, now)
+                state
+                    .applications
+                    .update_heartbeat(&application, health, current_mode, now)
                     .map_err(|error| ServiceError::Mode(error.to_string()))?;
                 let previous = state.system.health;
                 recalculate_health(&mut state, now);
@@ -175,28 +200,76 @@ impl SamService {
                     broadcast_state(&state);
                 }
             }
-            ApplicationToSam::ModeReady { application, transition_id } => {
+            ApplicationToSam::ModeReady {
+                application,
+                transition_id,
+            } => {
                 verify_application(registered, &application)?;
-                let event = state.modes.application_ready(&application, transition_id)
-                    .map_err(|error| ServiceError::Mode(error.to_string()))?;
+                let event = match state.modes.application_ready(&application, transition_id) {
+                    Ok(event) => event,
+                    Err(error) if is_late_transition_response(&error) => {
+                        warn!(application = %application.0, ?transition_id, %error, "ignoring late mode-ready response");
+                        return Ok(());
+                    }
+                    Err(error) => return Err(ServiceError::Mode(error.to_string())),
+                };
                 info!(application = %application.0, ?transition_id, "application ready for mode transition");
-                if let Some(ModeEvent::PreparationComplete { transition_id, target_mode }) = event {
+                if let Some(ModeEvent::PreparationComplete {
+                    transition_id,
+                    target_mode,
+                }) = event
+                {
                     info!(?transition_id, mode = ?target_mode, "all applications ready; broadcasting commit");
-                    broadcast(&state, SamToApplication::CommitMode { transition_id, mode: target_mode });
+                    broadcast(
+                        &state,
+                        SamToApplication::CommitMode {
+                            transition_id,
+                            mode: target_mode,
+                        },
+                    );
                 }
             }
-            ApplicationToSam::ModeRejected { application, transition_id, reason } => {
+            ApplicationToSam::ModeRejected {
+                application,
+                transition_id,
+                reason,
+            } => {
                 verify_application(registered, &application)?;
                 warn!(application = %application.0, ?transition_id, %reason, "application rejected mode transition");
-                state.modes.application_rejected(&application, transition_id, reason)
-                    .map_err(|error| ServiceError::Mode(error.to_string()))?;
+                if let Err(error) =
+                    state
+                        .modes
+                        .application_rejected(&application, transition_id, reason)
+                {
+                    if is_late_transition_response(&error) {
+                        warn!(application = %application.0, ?transition_id, %error, "ignoring late mode-rejection response");
+                        return Ok(());
+                    }
+                    return Err(ServiceError::Mode(error.to_string()));
+                }
                 broadcast(&state, SamToApplication::AbortMode { transition_id });
             }
-            ApplicationToSam::ModeCommitted { application, transition_id, mode } => {
+            ApplicationToSam::ModeCommitted {
+                application,
+                transition_id,
+                mode,
+            } => {
                 verify_application(registered, &application)?;
-                let event = state.modes.application_committed(&application, transition_id, mode)
-                    .map_err(|error| ServiceError::Mode(error.to_string()))?;
-                state.applications.set_mode(&application, mode)
+                let event = match state.modes.application_committed(
+                    &application,
+                    transition_id,
+                    mode,
+                ) {
+                    Ok(event) => event,
+                    Err(error) if is_late_transition_response(&error) => {
+                        warn!(application = %application.0, ?transition_id, %error, "ignoring late mode-committed response");
+                        return Ok(());
+                    }
+                    Err(error) => return Err(ServiceError::Mode(error.to_string())),
+                };
+                state
+                    .applications
+                    .set_mode(&application, mode)
                     .map_err(|error| ServiceError::Mode(error.to_string()))?;
                 info!(application = %application.0, ?transition_id, ?mode, "application confirmed mode commit");
                 if let Some(ModeEvent::TransitionComplete { mode, .. }) = event {
@@ -215,10 +288,18 @@ impl SamService {
     pub fn request_mode(&self, target: SystemMode) -> Result<TransitionId, ServiceError> {
         let mut state = self.lock()?;
         let participants: Vec<_> = state.clients.keys().cloned().collect();
-        let id = state.modes.request_transition(target, participants)
+        let id = state
+            .modes
+            .request_transition(target, participants)
             .map_err(|error| ServiceError::Mode(error.to_string()))?;
         info!(transition_id = ?id, from = ?state.system.mode, to = ?target, participants = state.clients.len(), "mode transition requested");
-        broadcast(&state, SamToApplication::PrepareMode { transition_id: id, requested_mode: target });
+        broadcast(
+            &state,
+            SamToApplication::PrepareMode {
+                transition_id: id,
+                requested_mode: target,
+            },
+        );
         Ok(id)
     }
 
@@ -227,23 +308,37 @@ impl SamService {
         Ok(self.lock()?.system)
     }
 
+    /// Whether the mode manager is currently collecting prepare or commit
+    /// responses. This is useful for automation that must distinguish a
+    /// rejected transition from one that is merely still in progress.
+    pub fn transition_in_progress(&self) -> Result<bool, ServiceError> {
+        Ok(!matches!(
+            self.lock()?.modes.state(),
+            ModeManagerState::Stable { .. }
+        ))
+    }
+
     /// A snapshot of every known application, sorted by id for stable
     /// display output.
     pub fn applications(&self, now: Instant) -> Result<Vec<ApplicationSnapshot>, ServiceError> {
         let state = self.lock()?;
-        let mut applications: Vec<_> = state.applications.iter().map(|(id, status)| {
-            let synchronized = status.connected && status.current_mode == state.system.mode;
-            let base_health = state.health.calculate_application(status, now);
-            ApplicationSnapshot {
-                application: id.clone(),
-                health: status.health,
-                effective_health: effective_application_health(base_health, synchronized),
-                current_mode: status.current_mode,
-                connected: status.connected,
-                synchronized,
-                heartbeat_age: now.saturating_duration_since(status.last_heartbeat),
-            }
-        }).collect();
+        let mut applications: Vec<_> = state
+            .applications
+            .iter()
+            .map(|(id, status)| {
+                let synchronized = status.connected && status.current_mode == state.system.mode;
+                let base_health = state.health.calculate_application(status, now);
+                ApplicationSnapshot {
+                    application: id.clone(),
+                    health: status.health,
+                    effective_health: effective_application_health(base_health, synchronized),
+                    current_mode: status.current_mode,
+                    connected: status.connected,
+                    synchronized,
+                    heartbeat_age: now.saturating_duration_since(status.last_heartbeat),
+                }
+            })
+            .collect();
         applications.sort_by(|left, right| left.application.0.cmp(&right.application.0));
         Ok(applications)
     }
@@ -264,19 +359,43 @@ impl SamService {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, ServiceState>, ServiceError> {
-        self.inner.lock().map_err(|_| ServiceError::StateUnavailable)
+        self.inner
+            .lock()
+            .map_err(|_| ServiceError::StateUnavailable)
     }
 }
 
-fn verify_connection(state: &ServiceState, app: &ApplicationId, id: ConnectionId) -> Result<(), ServiceError> {
-    if state.clients.get(app).is_some_and(|client| client.id == id) { Ok(()) }
-    else { Err(ServiceError::StaleConnection(app.clone())) }
+fn verify_connection(
+    state: &ServiceState,
+    app: &ApplicationId,
+    id: ConnectionId,
+) -> Result<(), ServiceError> {
+    if state.clients.get(app).is_some_and(|client| client.id == id) {
+        Ok(())
+    } else {
+        Err(ServiceError::StaleConnection(app.clone()))
+    }
 }
 
-fn verify_application(expected: &ApplicationId, actual: &ApplicationId) -> Result<(), ServiceError> {
-    if expected == actual { Ok(()) } else {
-        Err(ServiceError::ApplicationMismatch { expected: expected.clone(), actual: actual.clone() })
+fn verify_application(
+    expected: &ApplicationId,
+    actual: &ApplicationId,
+) -> Result<(), ServiceError> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(ServiceError::ApplicationMismatch {
+            expected: expected.clone(),
+            actual: actual.clone(),
+        })
     }
+}
+
+fn is_late_transition_response(error: &ModeError) -> bool {
+    matches!(
+        error,
+        ModeError::InvalidPhase | ModeError::StaleTransition | ModeError::UnknownParticipant(_)
+    )
 }
 
 fn recalculate_health(state: &mut ServiceState, now: Instant) {
@@ -293,10 +412,7 @@ fn recalculate_health(state: &mut ServiceState, now: Instant) {
     };
 }
 
-fn effective_application_health(
-    base_health: HealthState,
-    synchronized: bool,
-) -> HealthState {
+fn effective_application_health(base_health: HealthState, synchronized: bool) -> HealthState {
     if base_health == HealthState::Failed {
         HealthState::Failed
     } else if !synchronized || base_health == HealthState::Degraded {
@@ -307,10 +423,13 @@ fn effective_application_health(
 }
 
 fn broadcast_state(state: &ServiceState) {
-    broadcast(state, SamToApplication::StateBroadcast {
-        mode: state.system.mode,
-        health: state.system.health,
-    });
+    broadcast(
+        state,
+        SamToApplication::StateBroadcast {
+            mode: state.system.mode,
+            health: state.system.health,
+        },
+    );
 }
 
 fn broadcast(state: &ServiceState, message: SamToApplication) {
@@ -326,7 +445,9 @@ mod tests {
     use super::*;
     use sam_protocol::HealthState;
 
-    fn app(name: &str) -> ApplicationId { ApplicationId::from(name) }
+    fn app(name: &str) -> ApplicationId {
+        ApplicationId::from(name)
+    }
 
     #[test]
     fn full_transition_is_broadcast_and_committed() {
@@ -337,28 +458,144 @@ mod tests {
         let (nav_tx, mut nav_rx) = mpsc::channel(16);
         let (guidance_tx, mut guidance_rx) = mpsc::channel(16);
         let nav_id = service.register(nav.clone(), nav_tx, now).unwrap();
-        let guidance_id = service.register(guidance.clone(), guidance_tx, now).unwrap();
+        let guidance_id = service
+            .register(guidance.clone(), guidance_tx, now)
+            .unwrap();
         nav_rx.try_recv().unwrap();
         guidance_rx.try_recv().unwrap();
 
         let transition = service.request_mode(SystemMode::Working).unwrap();
-        assert!(matches!(nav_rx.try_recv().unwrap(), SamToApplication::PrepareMode { .. }));
+        assert!(matches!(
+            nav_rx.try_recv().unwrap(),
+            SamToApplication::PrepareMode { .. }
+        ));
         guidance_rx.try_recv().unwrap();
-        service.handle_message(&nav, nav_id, ApplicationToSam::ModeReady {
-            application: nav.clone(), transition_id: transition,
-        }, now).unwrap();
-        service.handle_message(&guidance, guidance_id, ApplicationToSam::ModeReady {
-            application: guidance.clone(), transition_id: transition,
-        }, now).unwrap();
-        assert!(matches!(nav_rx.try_recv().unwrap(), SamToApplication::CommitMode { .. }));
+        service
+            .handle_message(
+                &nav,
+                nav_id,
+                ApplicationToSam::ModeReady {
+                    application: nav.clone(),
+                    transition_id: transition,
+                },
+                now,
+            )
+            .unwrap();
+        service
+            .handle_message(
+                &guidance,
+                guidance_id,
+                ApplicationToSam::ModeReady {
+                    application: guidance.clone(),
+                    transition_id: transition,
+                },
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            nav_rx.try_recv().unwrap(),
+            SamToApplication::CommitMode { .. }
+        ));
         guidance_rx.try_recv().unwrap();
-        service.handle_message(&nav, nav_id, ApplicationToSam::ModeCommitted {
-            application: nav.clone(), transition_id: transition, mode: SystemMode::Working,
-        }, now).unwrap();
-        service.handle_message(&guidance, guidance_id, ApplicationToSam::ModeCommitted {
-            application: guidance.clone(), transition_id: transition, mode: SystemMode::Working,
-        }, now).unwrap();
+        service
+            .handle_message(
+                &nav,
+                nav_id,
+                ApplicationToSam::ModeCommitted {
+                    application: nav.clone(),
+                    transition_id: transition,
+                    mode: SystemMode::Working,
+                },
+                now,
+            )
+            .unwrap();
+        service
+            .handle_message(
+                &guidance,
+                guidance_id,
+                ApplicationToSam::ModeCommitted {
+                    application: guidance.clone(),
+                    transition_id: transition,
+                    mode: SystemMode::Working,
+                },
+                now,
+            )
+            .unwrap();
         assert_eq!(service.snapshot().unwrap().mode, SystemMode::Working);
+    }
+
+    #[test]
+    fn transition_activity_clears_after_rejection() {
+        let service = SamService::new(Duration::from_secs(2));
+        let now = Instant::now();
+        let telemetry = app("telemetry");
+        let (tx, mut rx) = mpsc::channel(8);
+        let connection = service.register(telemetry.clone(), tx, now).unwrap();
+        rx.try_recv().unwrap();
+
+        let transition = service.request_mode(SystemMode::Working).unwrap();
+        assert!(service.transition_in_progress().unwrap());
+        rx.try_recv().unwrap();
+        service
+            .handle_message(
+                &telemetry,
+                connection,
+                ApplicationToSam::ModeRejected {
+                    application: telemetry.clone(),
+                    transition_id: transition,
+                    reason: "temporary safety interlock".to_owned(),
+                },
+                now,
+            )
+            .unwrap();
+
+        assert!(!service.transition_in_progress().unwrap());
+        assert_eq!(service.snapshot().unwrap().mode, SystemMode::Startup);
+    }
+
+    #[test]
+    fn late_ready_after_another_application_rejects_is_ignored() {
+        let service = SamService::new(Duration::from_secs(2));
+        let now = Instant::now();
+        let navigation = app("navigation");
+        let telemetry = app("telemetry");
+        let (nav_tx, mut nav_rx) = mpsc::channel(8);
+        let (telemetry_tx, mut telemetry_rx) = mpsc::channel(8);
+        let nav_connection = service.register(navigation.clone(), nav_tx, now).unwrap();
+        let telemetry_connection = service
+            .register(telemetry.clone(), telemetry_tx, now)
+            .unwrap();
+        nav_rx.try_recv().unwrap();
+        telemetry_rx.try_recv().unwrap();
+
+        let transition = service.request_mode(SystemMode::Working).unwrap();
+        nav_rx.try_recv().unwrap();
+        telemetry_rx.try_recv().unwrap();
+        service
+            .handle_message(
+                &telemetry,
+                telemetry_connection,
+                ApplicationToSam::ModeRejected {
+                    application: telemetry.clone(),
+                    transition_id: transition,
+                    reason: "temporary safety interlock".to_owned(),
+                },
+                now,
+            )
+            .unwrap();
+
+        assert!(service
+            .handle_message(
+                &navigation,
+                nav_connection,
+                ApplicationToSam::ModeReady {
+                    application: navigation.clone(),
+                    transition_id: transition,
+                },
+                now,
+            )
+            .is_ok());
+        assert_eq!(service.snapshot().unwrap().mode, SystemMode::Startup);
     }
 
     #[test]
@@ -368,10 +605,20 @@ mod tests {
         let nav = app("navigation");
         let (tx, _rx) = mpsc::channel(4);
         let id = service.register(nav.clone(), tx, now).unwrap();
-        let result = service.handle_message(&nav, id, ApplicationToSam::Heartbeat {
-            application: app("guidance"), health: HealthState::Healthy, current_mode: SystemMode::Startup,
-        }, now);
-        assert!(matches!(result, Err(ServiceError::ApplicationMismatch { .. })));
+        let result = service.handle_message(
+            &nav,
+            id,
+            ApplicationToSam::Heartbeat {
+                application: app("guidance"),
+                health: HealthState::Healthy,
+                current_mode: SystemMode::Startup,
+            },
+            now,
+        );
+        assert!(matches!(
+            result,
+            Err(ServiceError::ApplicationMismatch { .. })
+        ));
     }
 
     #[test]
@@ -384,9 +631,18 @@ mod tests {
         let first = service.register(nav.clone(), first_tx, now).unwrap();
         let second = service.register(nav.clone(), second_tx, now).unwrap();
         service.disconnect(&nav, first, now).unwrap();
-        assert!(service.handle_message(&nav, second, ApplicationToSam::Heartbeat {
-            application: nav.clone(), health: HealthState::Healthy, current_mode: SystemMode::Startup,
-        }, now).is_ok());
+        assert!(service
+            .handle_message(
+                &nav,
+                second,
+                ApplicationToSam::Heartbeat {
+                    application: nav.clone(),
+                    health: HealthState::Healthy,
+                    current_mode: SystemMode::Startup,
+                },
+                now
+            )
+            .is_ok());
     }
 
     #[test]
@@ -398,7 +654,9 @@ mod tests {
         service.register(nav, tx, now).unwrap();
         rx.try_recv().unwrap();
 
-        service.refresh_health(now + Duration::from_secs(3)).unwrap();
+        service
+            .refresh_health(now + Duration::from_secs(3))
+            .unwrap();
         assert!(matches!(
             rx.try_recv().unwrap(),
             SamToApplication::StateBroadcast {
@@ -421,16 +679,18 @@ mod tests {
         let connection = service.register(navigation.clone(), tx, now).unwrap();
         rx.try_recv().unwrap();
 
-        service.handle_message(
-            &navigation,
-            connection,
-            ApplicationToSam::Heartbeat {
-                application: navigation.clone(),
-                health: HealthState::Healthy,
-                current_mode: SystemMode::Standby,
-            },
-            now,
-        ).unwrap();
+        service
+            .handle_message(
+                &navigation,
+                connection,
+                ApplicationToSam::Heartbeat {
+                    application: navigation.clone(),
+                    health: HealthState::Healthy,
+                    current_mode: SystemMode::Standby,
+                },
+                now,
+            )
+            .unwrap();
 
         let snapshot = service.applications(now).unwrap();
         assert!(!snapshot[0].synchronized);

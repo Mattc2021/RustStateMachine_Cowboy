@@ -3,8 +3,15 @@
 //! and drive mode transitions from the terminal while applications connect
 //! over local IPC in the background.
 
-use std::{error::Error, io::{self, Write}, time::{Duration, Instant}};
+mod auto_demo;
 
+use std::{
+    error::Error,
+    io::{self, Write},
+    time::{Duration, Instant},
+};
+
+use auto_demo::{run_auto_demo, AutoDemoConfig};
 use sam_protocol::SystemMode;
 use sam_service::{SamServer, SamService};
 use sam_transport::LocalEndpoint;
@@ -15,12 +22,25 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     init_logging();
+    let auto_demo = AutoDemoConfig::from_env()?;
     let endpoint = LocalEndpoint::default();
     let service = SamService::new(Duration::from_secs(2));
     let mut server_task = tokio::spawn(SamServer::new(endpoint.clone(), service.clone()).run());
-    let mut commands = BufReader::new(tokio::io::stdin()).lines();
 
     info!(endpoint = %endpoint.as_str(), "SAM process started");
+    if auto_demo.enabled() {
+        let result: Result<(), Box<dyn Error>> = tokio::select! {
+            result = &mut server_task => {
+                result??;
+                Ok(())
+            }
+            result = run_auto_demo(&service, &auto_demo) => result.map_err(Into::into),
+        };
+        server_task.abort();
+        return result;
+    }
+
+    let mut commands = BufReader::new(tokio::io::stdin()).lines();
     print_help();
     loop {
         tokio::select! {
@@ -98,8 +118,7 @@ fn print_help() {
 }
 
 fn init_logging() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)

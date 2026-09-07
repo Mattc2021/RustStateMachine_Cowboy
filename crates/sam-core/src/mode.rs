@@ -159,14 +159,21 @@ impl ModeManager {
         application: &ApplicationId,
         response_id: TransitionId,
     ) -> Result<Option<ModeEvent>, ModeError> {
-        let (transition_id, previous_mode, target_mode, waiting_for, ready) = match &mut self.state {
+        let (transition_id, previous_mode, target_mode, waiting_for, ready) = match &mut self.state
+        {
             ModeManagerState::Preparing {
                 transition_id,
                 current_mode,
                 target_mode,
                 waiting_for,
                 ready,
-            } => (*transition_id, *current_mode, *target_mode, waiting_for, ready),
+            } => (
+                *transition_id,
+                *current_mode,
+                *target_mode,
+                waiting_for,
+                ready,
+            ),
             _ => return Err(ModeError::InvalidPhase),
         };
 
@@ -304,10 +311,7 @@ mod tests {
         let guidance = app("guidance");
         let mut manager = ModeManager::new(SystemMode::Standby);
         let id = manager
-            .request_transition(
-                SystemMode::Working,
-                [navigation.clone(), guidance.clone()],
-            )
+            .request_transition(SystemMode::Working, [navigation.clone(), guidance.clone()])
             .unwrap();
 
         assert_eq!(manager.application_ready(&navigation, id).unwrap(), None);
@@ -338,10 +342,7 @@ mod tests {
         let guidance = app("guidance");
         let mut manager = ModeManager::new(SystemMode::Standby);
         let id = manager
-            .request_transition(
-                SystemMode::Working,
-                [navigation.clone(), guidance.clone()],
-            )
+            .request_transition(SystemMode::Working, [navigation.clone(), guidance.clone()])
             .unwrap();
 
         manager.application_ready(&navigation, id).unwrap();

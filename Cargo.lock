@@ -261,6 +261,7 @@ dependencies = [
  "sam-protocol",
  "sam-service",
  "sam-transport",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",

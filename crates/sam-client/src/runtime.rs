@@ -91,7 +91,9 @@ pub enum RuntimeError {
         supported_version: u16,
         reason: String,
     },
-    #[error("SAM accepted registration with protocol version {received}; client supports {supported}")]
+    #[error(
+        "SAM accepted registration with protocol version {received}; client supports {supported}"
+    )]
     ProtocolVersionMismatch { received: u16, supported: u16 },
     #[error("expected registration response, received {0:?}")]
     UnexpectedRegistrationResponse(SamToApplication),
@@ -146,7 +148,8 @@ impl ApplicationRuntime {
     /// the session ended — `run` decides whether/when to reconnect.
     async fn run_session<H: ModeHandler>(&self, handler: &mut H) -> Result<(), RuntimeError> {
         debug!(application = %self.application.0, endpoint = %self.config.endpoint.as_str(), "connecting to SAM");
-        let mut client = SamClient::connect(self.application.clone(), &self.config.endpoint).await?;
+        let mut client =
+            SamClient::connect(self.application.clone(), &self.config.endpoint).await?;
         debug!(application = %self.application.0, "transport connected; registering");
         client.register().await?;
 
@@ -179,9 +182,13 @@ impl ApplicationRuntime {
                         authoritative_mode = ?current_mode,
                         "synchronizing application mode after registration"
                     );
-                    handler.synchronize_mode(current_mode).await.map_err(|reason| {
-                        RuntimeError::InitialSynchronizationFailed { mode: current_mode, reason }
-                    })?;
+                    handler
+                        .synchronize_mode(current_mode)
+                        .await
+                        .map_err(|reason| RuntimeError::InitialSynchronizationFailed {
+                            mode: current_mode,
+                            reason,
+                        })?;
                     info!(application = %self.application.0, mode = ?current_mode, "initial mode synchronization complete");
                 }
                 handler

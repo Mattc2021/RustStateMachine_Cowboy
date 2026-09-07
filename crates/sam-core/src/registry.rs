@@ -178,7 +178,12 @@ mod tests {
 
         let later = start + Duration::from_secs(5);
         registry
-            .update_heartbeat(&app("navigation"), HealthState::Degraded, SystemMode::Working, later)
+            .update_heartbeat(
+                &app("navigation"),
+                HealthState::Degraded,
+                SystemMode::Working,
+                later,
+            )
             .unwrap();
 
         let status = registry.get(&app("navigation")).unwrap();

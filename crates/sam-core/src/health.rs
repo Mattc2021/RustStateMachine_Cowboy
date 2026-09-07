@@ -45,8 +45,7 @@ impl HealthManager {
         now: Instant,
     ) -> HealthState {
         if !application.connected
-            || now.saturating_duration_since(application.last_heartbeat)
-                > self.heartbeat_timeout
+            || now.saturating_duration_since(application.last_heartbeat) > self.heartbeat_timeout
             || application.health == HealthState::Failed
         {
             HealthState::Failed
@@ -82,10 +81,20 @@ mod tests {
         registry.register(app("navigation"), start);
         registry.register(app("guidance"), start);
         registry
-            .update_heartbeat(&app("navigation"), HealthState::Healthy, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("navigation"),
+                HealthState::Healthy,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
         registry
-            .update_heartbeat(&app("guidance"), HealthState::Healthy, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("guidance"),
+                HealthState::Healthy,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
 
         let manager = HealthManager::new(Duration::from_secs(1));
@@ -98,7 +107,12 @@ mod tests {
         let mut registry = ApplicationRegistry::default();
         registry.register(app("navigation"), start);
         registry
-            .update_heartbeat(&app("navigation"), HealthState::Degraded, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("navigation"),
+                HealthState::Degraded,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
 
         let manager = HealthManager::new(Duration::from_secs(1));
@@ -112,10 +126,20 @@ mod tests {
         registry.register(app("navigation"), start);
         registry.register(app("guidance"), start);
         registry
-            .update_heartbeat(&app("navigation"), HealthState::Failed, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("navigation"),
+                HealthState::Failed,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
         registry
-            .update_heartbeat(&app("guidance"), HealthState::Healthy, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("guidance"),
+                HealthState::Healthy,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
 
         let manager = HealthManager::new(Duration::from_secs(1));
@@ -128,7 +152,12 @@ mod tests {
         let mut registry = ApplicationRegistry::default();
         registry.register(app("navigation"), start);
         registry
-            .update_heartbeat(&app("navigation"), HealthState::Healthy, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("navigation"),
+                HealthState::Healthy,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
         registry.mark_disconnected(&app("navigation")).unwrap();
 
@@ -142,7 +171,12 @@ mod tests {
         let mut registry = ApplicationRegistry::default();
         registry.register(app("navigation"), start);
         registry
-            .update_heartbeat(&app("navigation"), HealthState::Healthy, SystemMode::Startup, start)
+            .update_heartbeat(
+                &app("navigation"),
+                HealthState::Healthy,
+                SystemMode::Startup,
+                start,
+            )
             .unwrap();
 
         let manager = HealthManager::new(Duration::from_secs(1));

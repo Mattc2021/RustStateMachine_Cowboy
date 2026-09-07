@@ -213,10 +213,16 @@ mod tests {
         let mut server_conn = FramedConnection::new(server);
 
         server_conn.send(&sample_message()).await.unwrap();
-        assert_eq!(client_reader.receive::<TestMessage>().await.unwrap(), sample_message());
+        assert_eq!(
+            client_reader.receive::<TestMessage>().await.unwrap(),
+            sample_message()
+        );
 
         client_writer.send(&sample_message()).await.unwrap();
-        assert_eq!(server_conn.receive::<TestMessage>().await.unwrap(), sample_message());
+        assert_eq!(
+            server_conn.receive::<TestMessage>().await.unwrap(),
+            sample_message()
+        );
     }
 
     #[tokio::test]
@@ -226,7 +232,10 @@ mod tests {
         let mut client_conn = FramedConnection::with_max_frame_size(client, 4);
 
         let error = client_conn.send(&sample_message()).await.unwrap_err();
-        assert!(matches!(error, TransportError::FrameTooLarge { maximum: 4, .. }));
+        assert!(matches!(
+            error,
+            TransportError::FrameTooLarge { maximum: 4, .. }
+        ));
     }
 
     #[tokio::test]
@@ -237,7 +246,10 @@ mod tests {
         // Write a length prefix claiming a huge payload; receive_frame must
         // reject this from the prefix alone, without waiting for that many
         // payload bytes to actually arrive.
-        client.write_all(&1_000_000_u32.to_be_bytes()).await.unwrap();
+        client
+            .write_all(&1_000_000_u32.to_be_bytes())
+            .await
+            .unwrap();
 
         let error = server_conn.receive::<TestMessage>().await.unwrap_err();
         assert!(matches!(
